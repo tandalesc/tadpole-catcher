@@ -137,35 +137,20 @@ class Client:
         self.browser.find_element_by_class_name("tp-block-half").click()
         self.browser.find_element_by_class_name("other-login-button").click()
 
-        # Focus on the google auth popup.
-        self.switch_windows()
+        # Get email, password, and submit elements
+        form = self.browser.find_element_by_class_name("form-horizontal")
+        email =  form.find_element_by_xpath('//input[@type="text"]')
+        pwd = form.find_element_by_xpath('//input[@type="password"]')
+        submit = form.find_element_by_xpath('//button[@type="submit"]')
 
-        # Enter email.
-        email = self.browser.find_element_by_id("Email")
+        # Fill out info and submit
         email.send_keys(input("Enter email: "))
-        email.submit()
+        pwd.send_keys(getpass("Enter password:"))
+        self.logger.info("Clicking 'submit' button.")
+        submit.click()
 
-        # Enter password.
-        passwd = self.browser.find_element_by_id("Passwd")
-        passwd.send_keys(getpass("Enter password:"))
-        passwd.submit()
-
-        # Enter 2FA pin.
-        #pin = self.br.find_element_by_id("totpPin")
-        #pin.send_keys(getpass("Enter google verification code: "))
-        #pin.submit()
-
-        # wait while users approve through google mobile phone app
-        input("Enter a key when you have approved on mobile phone")
-
-        # Click "approve".
         self.logger.info("Sleeping 2 seconds.")
         self.sleep(minsleep=2)
-        self.logger.info("Clicking 'approve' button.")
-        self.browser.find_element_by_id("submit_approve_access").click()
-
-        # Switch back to tadpoles.
-        self.switch_windows()
 
     def iter_monthyear(self):
         '''Yields pairs of xpaths for each year/month tile on the
@@ -297,7 +282,7 @@ class Client:
 
         try:
             self.load_cookies()
-        except (OSError, IOError):
+        except (OSError, IOError, FileNotFoundError):
             self.logger.info("Creating new cookies")
             self.do_login()
             self.dump_cookies()
@@ -313,8 +298,9 @@ class Client:
                 self.save_image(url)
             except DownloadError:
                 self.logger.exception("Error while saving url %s", url)
+            except KeyboardInterrupt:
+                self.logger.info("Download interrupted by user")
 
 if __name__ == "__main__":
     with Client() as client:
         client.download_images()
-
