@@ -30,6 +30,7 @@ class Client:
     CONFIG_FILE_NAME = "conf.json"
     MIN_SLEEP = 1
     MAX_SLEEP = 3
+    MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
     def __init__(self, download_reports=True):
         self.init_logging()
@@ -39,6 +40,7 @@ class Client:
         self.__current_month__ = None
         self.__current_year__ = None
         self.download_reports = download_reports
+        self.month_lookup = {month: "{:02d}".format(Client.MONTHS.index(month)+1) for month in Client.MONTHS}
 
     def init_logging(self):
         """Set up logging configuration"""
@@ -131,6 +133,10 @@ class Client:
         other_window = (all_windows - current_window).pop()
         self.browser.switch_to.window(other_window)
 
+    def get_child(self):
+        return self.browser.execute_script("return tadpoles.appParams['children'][0]['display_name']").split(' ')[0].lower()
+
+
     def do_login(self):
         """Perform login to tadpole (using google)"""
         self.logger.info("Navigating to login page.")
@@ -219,10 +225,11 @@ class Client:
         display_text = div.get_attribute('outerText')
         date_text = display_text.split('\n')[1].split('/')[1]
         # Make file name
+        child_text = self.get_child()
         year_text = self.__current_year__.text
-        month_text = self.__current_month__.text
-        filename_parts = ['download', year_text, month_text, 'tadpoles-%s-%s-%s.%s']
-        filename_report = abspath(join(*filename_parts) % (year_text, month_text, date_text, 'html'))
+        month_text = self.month_lookup[self.__current_month__.text]
+        filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}.{}']
+        filename_report = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, 'html'))
 
         # Only download if the file doesn't already exist.
         if isfile(filename_report):
@@ -261,16 +268,17 @@ class Client:
         # Make the local filename.
         _, key = url.split("key=")
         year_text = self.__current_year__.text
-        month_text = self.__current_month__.text
-
-        filename_parts = ['download', year_text, month_text, 'tadpoles-%s-%s-%s.%s']
-        filename_jpg = abspath(join(*filename_parts) % (year_text, month_text, key, 'jpg'))
+        month_text = self.month_lookup[self.__current_month__.text]
+        child_text = self.get_child()
+        date_text = '01'
+        filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
+        filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'jpg'))
 
         # we might even get a png file even though the mime type is jpeg.
-        filename_png = abspath(join(*filename_parts) % (year_text, month_text, key, 'png'))
+        filename_png = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'png'))
 
         # We don't know if we have a video or image yet so create both name
-        filename_video = abspath(join(*filename_parts) % (year_text, month_text, key, 'mp4'))
+        filename_video = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'mp4'))
 
         # Only download if the file doesn't already exist.
         if isfile(filename_jpg):
