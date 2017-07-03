@@ -31,13 +31,14 @@ class Client:
     MIN_SLEEP = 1
     MAX_SLEEP = 3
 
-    def __init__(self):
+    def __init__(self, download_reports=True):
         self.init_logging()
         self.browser = None
         self.cookies = None
         self.req_cookies = None
         self.__current_month__ = None
         self.__current_year__ = None
+        self.download_reports = download_reports
 
     def init_logging(self):
         """Set up logging configuration"""
@@ -183,10 +184,11 @@ class Client:
     def iter_urls(self):
         '''Find all the image urls on the current page.
         '''
-        # Click the "All" button
-        self.sleep(1, 3)
-        all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
-        all_btn.click()
+        if self.download_reports:
+            # Click the "All" button, so reports are included in our iterator
+            self.sleep(1, 3) # Ensure page is loaded
+            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
+            all_btn.click()
 
         # For each month on the dashboard...
         for month in self.iter_monthyear():
@@ -197,7 +199,7 @@ class Client:
             re_url = re.compile('\\("([^"]+)')
             for div in self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div'):
                 url = re_url.search(div.get_attribute("style"))
-                # We know it's a report
+                # Bools to correctly identify reports and images
                 report = (not url) and ('report' in div.get_attribute('outerText'))
                 image = url and ('thumbnail' in url.group(1))
 
@@ -211,7 +213,8 @@ class Client:
                     yield url, 'image'
 
     def save_report(self, div):
-        '''Save a report given the div'''
+        '''Save a report given the appropriate div.
+        '''
         # Get date from div display text
         display_text = div.get_attribute('outerText')
         date_text = display_text.split('\n')[1].split('/')[1]
@@ -223,13 +226,15 @@ class Client:
 
         # Only download if the file doesn't already exist.
         if isfile(filename_report):
-            self.logger.info("Already downloaded html file: %s", filename_report)
+            self.logger.info("Already downloaded report: %s", filename_report)
             return
 
         # Make sure the parent dir exists.
         directory = dirname(filename_report)
         if not isdir(directory):
             os.makedirs(directory)
+
+        self.logger.info("Downloading report: %s", filename_report)
 
         # Click on div
         div.click()
@@ -247,6 +252,7 @@ class Client:
             report_file.write("<html>")
             report_file.write(text)
             report_file.write("</html>")
+
         self.logger.info("Finished saving: %s", filename_report)
 
     def save_image(self, url):
@@ -344,11 +350,9 @@ class Client:
         for data, data_type in self.iter_urls():
             try:
                 if data_type == 'image':
-                    url = data
-                    self.save_image(url)
+                    self.save_image(data)
                 elif data_type == 'report':
-                    div = data
-                    self.save_report(div)
+                    self.save_report(data)
             except DownloadError:
                 self.logger.exception("Error while saving resource")
             except KeyboardInterrupt:
