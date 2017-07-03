@@ -183,6 +183,11 @@ class Client:
     def iter_urls(self):
         '''Find all the image urls on the current page.
         '''
+        # Click the "All" button
+        self.sleep(1, 3)
+        all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
+        all_btn.click()
+
         # For each month on the dashboard...
         for month in self.iter_monthyear():
             # Navigate to the next month.
@@ -190,20 +195,63 @@ class Client:
             self.logger.info("Getting urls for month: %s", month.text)
             self.sleep(minsleep=5, maxsleep=7)
             re_url = re.compile('\\("([^"]+)')
-            for div in self.browser.find_elements_by_xpath("//li/div"):
+            for div in self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div'):
                 url = re_url.search(div.get_attribute("style"))
-                if not url:
-                    continue
-                url = url.group(1)
-                url = url.replace('thumbnail=true', '')
-                url = url.replace('&thumbnail=true', '')
-                url = 'https://www.tadpoles.com' + url
-                yield url
+                # We know it's a report
+                report = (not url) and ('report' in div.get_attribute('outerText'))
+                image = url and ('thumbnail' in url.group(1))
+
+                if report:
+                    yield div, 'report'
+                elif image:
+                    url = url.group(1)
+                    url = url.replace('thumbnail=true', '')
+                    url = url.replace('&thumbnail=true', '')
+                    url = 'https://www.tadpoles.com' + url
+                    yield url, 'image'
+
+    def save_report(self, div):
+        '''Save a report given the div'''
+        # Get date from div display text
+        display_text = div.get_attribute('outerText')
+        date_text = display_text.split('\n')[1].split('/')[1]
+        # Make file name
+        year_text = self.__current_year__.text
+        month_text = self.__current_month__.text
+        filename_parts = ['download', year_text, month_text, 'tadpoles-%s-%s-%s.%s']
+        filename_report = abspath(join(*filename_parts) % (year_text, month_text, date_text, 'html'))
+
+        # Only download if the file doesn't already exist.
+        if isfile(filename_report):
+            self.logger.info("Already downloaded html file: %s", filename_report)
+            return
+
+        # Make sure the parent dir exists.
+        directory = dirname(filename_report)
+        if not isdir(directory):
+            os.makedirs(directory)
+
+        # Click on div
+        div.click()
+        self.sleep(1, 2) # Wait to load
+        # Extract body
+        body = self.browser.find_element_by_class_name('modal-overflow-wrapper')
+        text = body.get_attribute('innerHTML')
+        # Close pop-up
+        x = self.browser.find_element_by_xpath('//*[@id="dr-modal-printable"]/div[1]/i')
+        x.click()
+        self.sleep(1, 2) # Wait to load
+
+        with open(filename_report, 'w') as report_file:
+            self.logger.info("Saving: %s", filename_report)
+            report_file.write("<html>")
+            report_file.write(text)
+            report_file.write("</html>")
+        self.logger.info("Finished saving: %s", filename_report)
 
     def save_image(self, url):
         '''Save an image locally using requests.
         '''
-
         # Make the local filename.
         _, key = url.split("key=")
         year_text = self.__current_year__.text
@@ -293,11 +341,16 @@ class Client:
         # Get the cookies ready for requests lib.
         self.requestify_cookies()
 
-        for url in self.iter_urls():
+        for data, data_type in self.iter_urls():
             try:
-                self.save_image(url)
+                if data_type == 'image':
+                    url = data
+                    self.save_image(url)
+                elif data_type == 'report':
+                    div = data
+                    self.save_report(div)
             except DownloadError:
-                self.logger.exception("Error while saving url %s", url)
+                self.logger.exception("Error while saving resource")
             except KeyboardInterrupt:
                 self.logger.info("Download interrupted by user")
 
