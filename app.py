@@ -203,20 +203,31 @@ class Client:
             self.logger.info("Getting urls for month: %s", month.text)
             self.sleep(minsleep=5, maxsleep=7)
             re_url = re.compile('\\("([^"]+)')
-            for div in self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div'):
-                url = re_url.search(div.get_attribute("style"))
-                # Bools to correctly identify reports and images
-                report = (not url) and ('report' in div.get_attribute('outerText'))
-                image = url and ('thumbnail' in url.group(1))
+            elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
 
-                if report:
+            # Bools to correctly identify reports and images
+            url = lambda div: re_url.search(div.get_attribute("style"))
+            report = lambda div: (not url(div)) and ('report' in div.get_attribute('outerText'))
+            image = lambda div: url(div) and ('thumbnail' in url(div).group(1))
+
+            # Count valid elements
+            count = 0
+            for div in elements:
+                if report(div) or image(div):
+                    count += 1
+
+            for div in elements:
+                if report(div):
+                    count -= 1
                     yield div, 'report'
-                elif image:
-                    url = url.group(1)
-                    url = url.replace('thumbnail=true', '')
-                    url = url.replace('&thumbnail=true', '')
-                    url = 'https://www.tadpoles.com' + url
-                    yield url, 'image'
+                elif image(div):
+                    _url = url(div).group(1)
+                    _url = _url.replace('thumbnail=true', '')
+                    _url = _url.replace('&thumbnail=true', '')
+                    _url = 'https://www.tadpoles.com' + _url
+                    _c = count
+                    count -= 1
+                    yield (_url, _c), 'image'
 
     def save_report(self, div):
         '''Save a report given the appropriate div.
@@ -262,15 +273,17 @@ class Client:
 
         self.logger.info("Finished saving: %s", filename_report)
 
-    def save_image(self, url):
+    def save_image(self, url_data):
         '''Save an image locally using requests.
         '''
         # Make the local filename.
+        url, index = url_data
         _, key = url.split("key=")
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
         child_text = self.get_child()
-        date_text = '01'
+
+        date_text = "{:02d}".format(index)
         filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
         filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'jpg'))
 
