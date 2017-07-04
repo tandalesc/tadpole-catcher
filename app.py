@@ -20,6 +20,37 @@ class DownloadError(Exception):
     """An exception indicating some errors during downloading"""
     pass
 
+class Image(object):
+    url_re = re.compile('\\("([^"]+)')
+    url_search = lambda div: Image.url_re.search(div.get_attribute("style"))
+    def __init__(self, div, date=None):
+        self.div = div
+        # Extract URL from div
+        _url = Image.url_search(div).group(1)
+        _url = _url.replace('thumbnail=true', '')
+        _url = _url.replace('&thumbnail=true', '')
+        self.url = 'https://www.tadpoles.com' + _url
+        # Extract id from div
+        # Shorten _id to avoid OS file length limit
+        # TODO more robust id algorithm
+        _id = div.get_attribute('id').split('-')[1]
+        _id = _id[int(len(_id)/2):]
+        self.id = _id
+        # Save date (defaults to None)
+        self.date = date
+        # Get key (for downloading)
+        _, self.key = self.url.split("key=")
+    @property
+    def date_text(self):
+        return "{:02d}".format(self.date if self.date is not None else 1)
+
+class Report(object):
+    def __init__(self, div):
+        self.div = div
+        self.display_text = div.get_attribute('outerText')
+        date = int(self.display_text.split('\n')[1].split('/')[1])
+        self.date_text = "{:02d}".format(date)
+
 
 class Client:
     """The main client class responsible for downloading pictures/videos"""
@@ -39,7 +70,9 @@ class Client:
         self.req_cookies = None
         self.__current_month__ = None
         self.__current_year__ = None
+        self.current_child = None
         self.download_reports = download_reports
+        # e.g. {'jan':'01', 'feb':'02', ...}
         self.month_lookup = {month: "{:02d}".format(Client.MONTHS.index(month)+1) for month in Client.MONTHS}
 
     def init_logging(self):
@@ -134,8 +167,10 @@ class Client:
         self.browser.switch_to.window(other_window)
 
     def get_child(self):
-        return self.browser.execute_script("return tadpoles.appParams['children'][0]['display_name']").split(' ')[0].lower()
-
+        if self.current_child is None:
+            full_name = self.browser.execute_script("return tadpoles.appParams['children'][0]['display_name']")
+            self.current_child = full_name.split(' ')[0].lower()
+        return self.current_child
 
     def do_login(self):
         """Perform login to tadpole (using google)"""
@@ -193,6 +228,7 @@ class Client:
         if self.download_reports:
             # Click the "All" button, so reports are included in our iterator
             self.sleep(1, 3) # Ensure page is loaded
+            self.logger.info("Clicking 'All' button to load reports")
             all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
             all_btn.click()
 
@@ -202,32 +238,45 @@ class Client:
             month.click()
             self.logger.info("Getting urls for month: %s", month.text)
             self.sleep(minsleep=5, maxsleep=7)
-            re_url = re.compile('\\("([^"]+)')
-            for div in self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div'):
-                url = re_url.search(div.get_attribute("style"))
-                # Bools to correctly identify reports and images
-                report = (not url) and ('report' in div.get_attribute('outerText'))
-                image = url and ('thumbnail' in url.group(1))
 
-                if report:
-                    yield div, 'report'
-                elif image:
-                    url = url.group(1)
-                    url = url.replace('thumbnail=true', '')
-                    url = url.replace('&thumbnail=true', '')
-                    url = 'https://www.tadpoles.com' + url
-                    yield url, 'image'
+            # Bools to correctly identify reports and images
+            report = lambda div: (not Image.url_search(div)) and ('report' in div.get_attribute('outerText'))
+            image = lambda div: Image.url_search(div) and ('thumbnail' in Image.url_search(div).group(1))
+            elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
 
-    def save_report(self, div):
+            # Collect media files until we see a report
+            # Once we see a report, apply that date to all seen media files
+            # Yield processed media files, and then the report
+            # Deal with edge case where no report is found
+            media_buffer = []
+            for div in elements:
+                if image(div):
+                    img = Image(div=div)
+                    media_buffer.append(img)
+                elif report(div):
+                    _report = Report(div=div)
+                    # Apply date to all elements in buffer
+                    date_text = _report.date_text
+                    for img in media_buffer:
+                        img.date = int(date_text)
+                    # For each image/video, pop from buffer and yield
+                    while len(media_buffer) > 0:
+                        yield media_buffer.pop()
+                    # Once images are processed, yield report div
+                    yield _report
+            # Handle edge case where there are media files but no report
+            while len(media_buffer) > 0:
+                yield media_buffer.pop()
+
+    def save_report(self, report):
         '''Save a report given the appropriate div.
         '''
-        # Get date from div display text
-        display_text = div.get_attribute('outerText')
-        date_text = display_text.split('\n')[1].split('/')[1]
+
         # Make file name
         child_text = self.get_child()
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
+        date_text = report.date_text
         filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}.{}']
         filename_report = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, 'html'))
 
@@ -243,6 +292,7 @@ class Client:
 
         self.logger.info("Downloading report: %s", filename_report)
 
+        div = report.div
         # Click on div
         div.click()
         self.sleep(1, 2) # Wait to load
@@ -262,23 +312,26 @@ class Client:
 
         self.logger.info("Finished saving: %s", filename_report)
 
-    def save_image(self, url):
+    def save_image(self, img):
         '''Save an image locally using requests.
         '''
-        # Make the local filename.
-        _, key = url.split("key=")
+
+        url = img.url
+        date_text = img.date_text
+        _id = img.id
+        key = img.key
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
         child_text = self.get_child()
-        date_text = '01'
+
+        # Make the local filename.
         filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
-        filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'jpg'))
 
+        filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, _id, 'jpg'))
         # we might even get a png file even though the mime type is jpeg.
-        filename_png = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'png'))
-
+        filename_png = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, _id, 'png'))
         # We don't know if we have a video or image yet so create both name
-        filename_video = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, key, 'mp4'))
+        filename_video = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, _id, 'mp4'))
 
         # Only download if the file doesn't already exist.
         if isfile(filename_jpg):
@@ -355,15 +408,15 @@ class Client:
         # Get the cookies ready for requests lib.
         self.requestify_cookies()
 
-        for data, data_type in self.iter_urls():
+        for response in self.iter_urls():
             try:
-                if data_type == 'image':
-                    self.save_image(data)
-                elif data_type == 'report':
-                    self.save_report(data)
+                if isinstance(response, Image):
+                    self.save_image(response)
+                elif isinstance(response, Report):
+                    self.save_report(response)
             except DownloadError:
                 self.logger.exception("Error while saving resource")
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt):
                 self.logger.info("Download interrupted by user")
 
 if __name__ == "__main__":
