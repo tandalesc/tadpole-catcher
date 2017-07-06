@@ -77,6 +77,11 @@ class Client:
 
     def init_logging(self):
         """Set up logging configuration"""
+        # Create logging dir
+        directory = dirname('logs/')
+        if not isdir(directory):
+            os.makedirs(directory)
+
         logging_config = dict(
             version=1,
             formatters={
