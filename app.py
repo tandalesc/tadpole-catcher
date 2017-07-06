@@ -309,7 +309,7 @@ class Client:
         x.click()
         self.sleep(1, 2) # Wait to load
 
-        with open(filename_report, 'w') as report_file:
+        with open(filename_report, 'w', encoding='UTF-8') as report_file:
             self.logger.info("Saving: %s", filename_report)
             report_file.write("<html>")
             report_file.write(text)
