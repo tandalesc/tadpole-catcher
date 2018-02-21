@@ -112,7 +112,7 @@ class Client:
 
     def __enter__(self):
         self.logger.info("Starting browser")
-        self.browser = webdriver.Chrome()
+        self.browser = webdriver.Chrome('./chromedriver')
         self.browser.implicitly_wait(10)
         self.logger.info("Got a browser")
         return self
@@ -234,7 +234,7 @@ class Client:
             # Click the "All" button, so reports are included in our iterator
             self.sleep(1, 3) # Ensure page is loaded
             self.logger.info("Clicking 'All' button to load reports")
-            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
+            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/div[2]/ul/li[1]/a')
             all_btn.click()
 
         # For each month on the dashboard...
