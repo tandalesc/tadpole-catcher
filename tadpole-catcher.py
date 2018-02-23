@@ -4,6 +4,7 @@ import os
 from os.path import abspath, dirname, join, isfile, isdir
 import re
 import sys
+import json
 import time
 import pickle
 import logging
@@ -13,6 +14,7 @@ from random import randrange
 from getpass import getpass
 
 from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import NoSuchElementException
 import requests
 
@@ -56,7 +58,7 @@ class Client:
     """The main client class responsible for downloading pictures/videos"""
 
     COOKIE_FILE = "state/cookies.pkl"
-    ROOT_URL = "http://tadpoles.com/"
+    ROOT_URL = "http://www.tadpoles.com/parents"
     HOME_URL = "https://www.tadpoles.com/parents"
     CONFIG_FILE_NAME = "conf.json"
     MIN_SLEEP = 1
@@ -171,11 +173,25 @@ class Client:
         other_window = (all_windows - current_window).pop()
         self.browser.switch_to.window(other_window)
 
-    def get_child(self):
-        if self.current_child is None:
-            full_name = self.browser.execute_script("return tadpoles.appParams['children'][0]['display_name']")
-            self.current_child = full_name.split(' ')[0].lower()
-        return self.current_child
+    def get_current_child(self):
+        return self.app_params['children'][self.current_child_ind]
+
+    def get_child_name(self):
+        display_name = self.get_current_child()['display_name']
+        return display_name.split(' ')[0]
+
+    def get_num_children(self):
+        return len(self.app_params['children'])
+
+    def has_next_child(self):
+        return self.current_child_ind+1 < self.get_num_children()
+
+    # add 1 to current child index, and reset to 0 if too many
+    def next_child(self):
+        if self.has_next_child():
+            self.current_child_ind+=1
+        else:
+            self.current_child_ind=0
 
     def do_login(self):
         """Perform login to tadpole (using google)"""
@@ -244,41 +260,56 @@ class Client:
             self.logger.info("Getting urls for month: %s", month.text)
             self.sleep(minsleep=5, maxsleep=7)
 
-            # Bools to correctly identify reports and images
-            report = lambda div: (not Image.url_search(div)) and ('report' in div.get_attribute('outerText'))
-            image = lambda div: Image.url_search(div) and ('thumbnail' in Image.url_search(div).group(1))
-            elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
+            # For each child...
+            for child in range(self.get_num_children()):
+                # Click on child if needed
+                if(self.get_num_children() > 1):
+                    self.logger.info("Clicking on %s's page", self.get_child_name())
+                    #0 ->2nd li, 1->3rd li, etc.
+                    current_child = self.browser.find_element_by_xpath('//*[@id="app"]/div[3]/div[3]/ul/li['+str(self.current_child_ind+2)+']/li/div')
+                    # click events are only activated on mouseover
+                    chain = ActionChains(self.browser).move_to_element_with_offset(current_child, 5, 5).click()
+                    chain.perform()
+                # Bools to correctly identify reports and images
+                report = lambda div: (not Image.url_search(div)) and ('report' in div.get_attribute('outerText'))
+                image = lambda div: Image.url_search(div) and ('thumbnail' in Image.url_search(div).group(1))
+                elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
 
-            # Collect media files until we see a report
-            # Once we see a report, apply that date to all seen media files
-            # Yield processed media files, and then the report
-            # Deal with edge case where no report is found
-            media_buffer = []
-            for div in elements:
-                if image(div):
-                    img = Image(div=div)
-                    media_buffer.append(img)
-                elif report(div):
-                    _report = Report(div=div)
-                    # Apply date to all elements in buffer
-                    date_text = _report.date_text
-                    for img in media_buffer:
-                        img.date = int(date_text)
-                    # For each image/video, pop from buffer and yield
-                    while len(media_buffer) > 0:
-                        yield media_buffer.pop()
-                    # Once images are processed, yield report div
-                    yield _report
-            # Handle edge case where there are media files but no report
-            while len(media_buffer) > 0:
-                yield media_buffer.pop()
+                # Collect media files until we see a report
+                # Once we see a report, apply that date to all seen media files
+                # Yield processed media files, and then the report
+                # Deal with edge case where no report is found
+                media_buffer = []
+                for div in elements:
+                    if image(div):
+                        img = Image(div=div)
+                        media_buffer.append(img)
+                    elif report(div):
+                        _report = Report(div=div)
+                        # Apply date to all elements in buffer
+                        date_text = _report.date_text
+                        for img in media_buffer:
+                            img.date = int(date_text)
+                        # For each image/video, pop from buffer and yield
+                        while len(media_buffer) > 0:
+                            yield media_buffer.pop()
+                        # Once images are processed, yield report div
+                        yield _report
+                # Handle edge case where there are media files but no report
+                while len(media_buffer) > 0:
+                    yield media_buffer.pop()
+
+                # Goto next child, if possible
+                self.next_child()
+
+
 
     def save_report(self, report):
         '''Save a report given the appropriate div.
         '''
 
         # Make file name
-        child_text = self.get_child()
+        child_text = self.get_child_name().lower()
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
         date_text = report.date_text
@@ -327,7 +358,7 @@ class Client:
         key = img.key
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
-        child_text = self.get_child()
+        child_text = self.get_child_name().lower()
 
         # Make the local filename.
         filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
@@ -360,7 +391,8 @@ class Client:
         self.sleep(1, 3)
 
         # Download it with requests.
-        while True:
+        retries = 0
+        while retries < 5:
             resp = requests.get(url, cookies=self.req_cookies, stream=True)
             if resp.status_code == 200:
                 file = None
@@ -391,15 +423,23 @@ class Client:
                         file.close()
                 break
             else:
-                msg = 'Error downloading %r. Retrying.'
+                msg = 'Error downloading %r. Retrying. Response:'+str(resp)
+                retries += 1
                 self.logger.warning(msg, url)
                 self.sleep(1, 5)
 
     def download_images(self):
         '''Login to tadpoles.com and download all user's images.
         '''
-        self.navigate_url(self.ROOT_URL)
 
+        self.navigate_url(self.ROOT_URL)
+        self.do_login()
+        self.dump_cookies()
+        self.add_cookies_to_browser()
+        self.requestify_cookies()
+
+        #TODO fix login authetication
+        '''
         try:
             self.load_cookies()
         except (OSError, IOError, FileNotFoundError):
@@ -408,10 +448,16 @@ class Client:
             self.dump_cookies()
         else:
             self.add_cookies_to_browser()
-            self.navigate_url(self.HOME_URL)
 
         # Get the cookies ready for requests lib.
-        self.requestify_cookies()
+        self.requestify_cookies()'''
+
+        # Get application parameters
+        self.app_params = self.browser.execute_script("return tadpoles.appParams")
+        self.logger.info("Loaded Tadpoles parameters")
+
+        # start off with child 0 (if more than one exists)
+        self.current_child_ind = 0
 
         for response in self.iter_urls():
             try:
