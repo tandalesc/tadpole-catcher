@@ -12,6 +12,7 @@ import logging.config
 
 from random import randrange
 from getpass import getpass
+from configparser import ConfigParser
 
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
@@ -65,7 +66,7 @@ class Client:
     MAX_SLEEP = 3
     MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
-    def __init__(self, download_reports=True):
+    def __init__(self, config, download_reports=True):
         self.init_logging()
         self.browser = None
         self.cookies = None
@@ -74,8 +75,15 @@ class Client:
         self.__current_year__ = None
         self.current_child = None
         self.download_reports = download_reports
+        self.config = config
         # e.g. {'jan':'01', 'feb':'02', ...}
         self.month_lookup = {month: "{:02d}".format(Client.MONTHS.index(month)+1) for month in Client.MONTHS}
+
+    def config_login_info(self):
+        return self.config['AUTHENTICATION']
+
+    def config_requests_info(self):
+        return self.config['DOWNLOADS']
 
     def init_logging(self):
         """Set up logging configuration"""
@@ -202,13 +210,19 @@ class Client:
 
         # Get email, password, and submit elements
         form = self.browser.find_element_by_class_name("form-horizontal")
-        email =  form.find_element_by_xpath('//input[@type="text"]')
-        pwd = form.find_element_by_xpath('//input[@type="password"]')
+        email_form =  form.find_element_by_xpath('//input[@type="text"]')
+        pwd_form = form.find_element_by_xpath('//input[@type="password"]')
         submit = form.find_element_by_xpath('//button[@type="submit"]')
 
         # Fill out info and submit
-        email.send_keys(input("Enter email: "))
-        pwd.send_keys(getpass("Enter password:"))
+        email = self.config_login_info()['username']
+        pwd = self.config_login_info()['password']
+        if email is '' or pwd is '':
+            self.logger.info("settings.ini does not contain authentication information. Falling back to user-inputted values.")
+            email = input("Enter email: ")
+            pwd = input("Enter password: ")
+        email_form.send_keys(email)
+        pwd_form.send_keys(pwd)
         self.logger.info("Clicking 'submit' button.")
         submit.click()
 
@@ -359,9 +373,10 @@ class Client:
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
         child_text = self.get_child_name().lower()
+        default_download_dir = self.config_requests_info()['default_download_dir']
 
         # Make the local filename.
-        filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
+        filename_parts = [default_download_dir, child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
 
         filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, _id, 'jpg'))
         # we might even get a png file even though the mime type is jpeg.
@@ -391,8 +406,9 @@ class Client:
         self.sleep(1, 3)
 
         # Download it with requests.
+        max_retries = int(self.config_requests_info()['max_retries'])
         retries = 0
-        while retries < 5:
+        while retries < max_retries:
             resp = requests.get(url, cookies=self.req_cookies, stream=True)
             if resp.status_code == 200:
                 file = None
@@ -438,20 +454,6 @@ class Client:
         self.add_cookies_to_browser()
         self.requestify_cookies()
 
-        #TODO fix login authetication
-        '''
-        try:
-            self.load_cookies()
-        except (OSError, IOError, FileNotFoundError):
-            self.logger.info("Creating new cookies")
-            self.do_login()
-            self.dump_cookies()
-        else:
-            self.add_cookies_to_browser()
-
-        # Get the cookies ready for requests lib.
-        self.requestify_cookies()'''
-
         # Get application parameters
         self.app_params = self.browser.execute_script("return tadpoles.appParams")
         self.logger.info("Loaded Tadpoles parameters")
@@ -470,6 +472,32 @@ class Client:
             except (KeyboardInterrupt):
                 self.logger.info("Download interrupted by user")
 
+# create a config file if one does not already exist/needs to be reset
+def create_config_file(file_name):
+    cfg = ConfigParser()
+    cfg['AUTHENTICATION'] = {}
+    cfg['AUTHENTICATION']['username'] = ''
+    cfg['AUTHENTICATION']['password'] = ''
+    cfg['DOWNLOADS'] = {}
+    cfg['DOWNLOADS']['max_retries'] = '5'
+    cfg['DOWNLOADS']['default_download_dir'] = 'download'
+    with open(file_name, 'w') as cfg_file:
+        cfg.write(cfg_file)
+    return cfg
+
+# open an already existing config file (assumes correct items)
+def read_config_file(file_name):
+    cfg = ConfigParser()
+    cfg.read(file_name)
+    return cfg
+
 if __name__ == "__main__":
-    with Client() as client:
+    settings = 'settings.ini'
+    config = None
+    if isfile(settings):
+        config = read_config_file(settings)
+    else:
+        config = create_config_file(settings)
+
+    with Client(config) as client:
         client.download_images()
