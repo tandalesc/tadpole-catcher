@@ -58,7 +58,7 @@ class Report(object):
 class Client:
     """The main client class responsible for downloading pictures/videos"""
 
-    COOKIE_FILE = "state/cookies.pkl"
+    COOKIE_FILE = "cookies.pkl"
     ROOT_URL = "http://www.tadpoles.com/parents"
     HOME_URL = "https://www.tadpoles.com/parents"
     CONFIG_FILE_NAME = "conf.json"
@@ -122,7 +122,7 @@ class Client:
 
     def __enter__(self):
         self.logger.info("Starting browser")
-        self.browser = webdriver.Chrome('./chromedriver')
+        self.browser = webdriver.Chrome()
         self.browser.implicitly_wait(10)
         self.logger.info("Got a browser")
         return self
@@ -147,8 +147,6 @@ class Client:
     def load_cookies(self):
         """Load cookies from a previously saved ones"""
         self.logger.info("Loading cookies.")
-        if not isdir('state'):
-            os.mkdir('state')
         with open(self.COOKIE_FILE, "rb") as file:
             self.cookies = pickle.load(file)
 
@@ -218,7 +216,7 @@ class Client:
         email = self.config_login_info()['username']
         pwd = self.config_login_info()['password']
         if email is '' or pwd is '':
-            self.logger.info("settings.ini does not contain authentication information. Falling back to user-inputted values.")
+            self.logger.info("'settings.ini' does not contain authentication information. Falling back to user-inputted values.")
             email = input("Enter email: ")
             pwd = input("Enter password: ")
         email_form.send_keys(email)
@@ -483,7 +481,8 @@ def create_config_file(file_name):
     cfg['DOWNLOADS']['default_download_dir'] = 'download'
     with open(file_name, 'w') as cfg_file:
         cfg.write(cfg_file)
-    return cfg
+    print("New configuration file generated!\n")
+    print("Please edit 'settings.ini' and input your authentication information before continuing to use this script.\n")
 
 # open an already existing config file (assumes correct items)
 def read_config_file(file_name):
@@ -497,7 +496,9 @@ if __name__ == "__main__":
     if isfile(settings):
         config = read_config_file(settings)
     else:
-        config = create_config_file(settings)
+        create_config_file(settings)
+        input("Press any key to exit.")
+        exit()
 
     with Client(config) as client:
         client.download_images()
