@@ -4,6 +4,7 @@ import os
 from os.path import abspath, dirname, join, isfile, isdir
 import re
 import sys
+import json
 import time
 import pickle
 import logging
@@ -11,8 +12,10 @@ import logging.config
 
 from random import randrange
 from getpass import getpass
+from configparser import ConfigParser
 
 from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import NoSuchElementException
 import requests
 
@@ -55,15 +58,15 @@ class Report(object):
 class Client:
     """The main client class responsible for downloading pictures/videos"""
 
-    COOKIE_FILE = "state/cookies.pkl"
-    ROOT_URL = "http://tadpoles.com/"
+    COOKIE_FILE = "cookies.pkl"
+    ROOT_URL = "http://www.tadpoles.com/parents"
     HOME_URL = "https://www.tadpoles.com/parents"
     CONFIG_FILE_NAME = "conf.json"
     MIN_SLEEP = 1
     MAX_SLEEP = 3
     MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
-    def __init__(self, download_reports=True):
+    def __init__(self, config, download_reports=True):
         self.init_logging()
         self.browser = None
         self.cookies = None
@@ -72,8 +75,15 @@ class Client:
         self.__current_year__ = None
         self.current_child = None
         self.download_reports = download_reports
+        self.config = config
         # e.g. {'jan':'01', 'feb':'02', ...}
         self.month_lookup = {month: "{:02d}".format(Client.MONTHS.index(month)+1) for month in Client.MONTHS}
+
+    def config_login_info(self):
+        return self.config['AUTHENTICATION']
+
+    def config_requests_info(self):
+        return self.config['DOWNLOADS']
 
     def init_logging(self):
         """Set up logging configuration"""
@@ -137,8 +147,6 @@ class Client:
     def load_cookies(self):
         """Load cookies from a previously saved ones"""
         self.logger.info("Loading cookies.")
-        if not isdir('state'):
-            os.mkdir('state')
         with open(self.COOKIE_FILE, "rb") as file:
             self.cookies = pickle.load(file)
 
@@ -171,11 +179,25 @@ class Client:
         other_window = (all_windows - current_window).pop()
         self.browser.switch_to.window(other_window)
 
-    def get_child(self):
-        if self.current_child is None:
-            full_name = self.browser.execute_script("return tadpoles.appParams['children'][0]['display_name']")
-            self.current_child = full_name.split(' ')[0].lower()
-        return self.current_child
+    def get_current_child(self):
+        return self.app_params['children'][self.current_child_ind]
+
+    def get_child_name(self):
+        display_name = self.get_current_child()['display_name']
+        return display_name.split(' ')[0]
+
+    def get_num_children(self):
+        return len(self.app_params['children'])
+
+    def has_next_child(self):
+        return self.current_child_ind+1 < self.get_num_children()
+
+    # add 1 to current child index, and reset to 0 if too many
+    def next_child(self):
+        if self.has_next_child():
+            self.current_child_ind+=1
+        else:
+            self.current_child_ind=0
 
     def do_login(self):
         """Perform login to tadpole (using google)"""
@@ -186,13 +208,19 @@ class Client:
 
         # Get email, password, and submit elements
         form = self.browser.find_element_by_class_name("form-horizontal")
-        email =  form.find_element_by_xpath('//input[@type="text"]')
-        pwd = form.find_element_by_xpath('//input[@type="password"]')
+        email_form =  form.find_element_by_xpath('//input[@type="text"]')
+        pwd_form = form.find_element_by_xpath('//input[@type="password"]')
         submit = form.find_element_by_xpath('//button[@type="submit"]')
 
         # Fill out info and submit
-        email.send_keys(input("Enter email: "))
-        pwd.send_keys(getpass("Enter password:"))
+        email = self.config_login_info()['username']
+        pwd = self.config_login_info()['password']
+        if email is '' or pwd is '':
+            self.logger.info("'settings.ini' does not contain authentication information. Falling back to user-inputted values.")
+            email = input("Enter email: ")
+            pwd = input("Enter password: ")
+        email_form.send_keys(email)
+        pwd_form.send_keys(pwd)
         self.logger.info("Clicking 'submit' button.")
         submit.click()
 
@@ -234,7 +262,7 @@ class Client:
             # Click the "All" button, so reports are included in our iterator
             self.sleep(1, 3) # Ensure page is loaded
             self.logger.info("Clicking 'All' button to load reports")
-            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/ul/li[1]/a')
+            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/div[2]/ul/li[1]/a')
             all_btn.click()
 
         # For each month on the dashboard...
@@ -244,41 +272,56 @@ class Client:
             self.logger.info("Getting urls for month: %s", month.text)
             self.sleep(minsleep=5, maxsleep=7)
 
-            # Bools to correctly identify reports and images
-            report = lambda div: (not Image.url_search(div)) and ('report' in div.get_attribute('outerText'))
-            image = lambda div: Image.url_search(div) and ('thumbnail' in Image.url_search(div).group(1))
-            elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
+            # For each child...
+            for child in range(self.get_num_children()):
+                # Click on child if needed
+                if(self.get_num_children() > 1):
+                    self.logger.info("Clicking on %s's page", self.get_child_name())
+                    #0 ->2nd li, 1->3rd li, etc.
+                    current_child = self.browser.find_element_by_xpath('//*[@id="app"]/div[3]/div[3]/ul/li['+str(self.current_child_ind+2)+']/li/div')
+                    # click events are only activated on mouseover
+                    chain = ActionChains(self.browser).move_to_element_with_offset(current_child, 5, 5).click()
+                    chain.perform()
+                # Bools to correctly identify reports and images
+                report = lambda div: (not Image.url_search(div)) and ('report' in div.get_attribute('outerText'))
+                image = lambda div: Image.url_search(div) and ('thumbnail' in Image.url_search(div).group(1))
+                elements = self.browser.find_elements_by_xpath('//div[@class="well left-panel pull-left"]/ul/li/div')
 
-            # Collect media files until we see a report
-            # Once we see a report, apply that date to all seen media files
-            # Yield processed media files, and then the report
-            # Deal with edge case where no report is found
-            media_buffer = []
-            for div in elements:
-                if image(div):
-                    img = Image(div=div)
-                    media_buffer.append(img)
-                elif report(div):
-                    _report = Report(div=div)
-                    # Apply date to all elements in buffer
-                    date_text = _report.date_text
-                    for img in media_buffer:
-                        img.date = int(date_text)
-                    # For each image/video, pop from buffer and yield
-                    while len(media_buffer) > 0:
-                        yield media_buffer.pop()
-                    # Once images are processed, yield report div
-                    yield _report
-            # Handle edge case where there are media files but no report
-            while len(media_buffer) > 0:
-                yield media_buffer.pop()
+                # Collect media files until we see a report
+                # Once we see a report, apply that date to all seen media files
+                # Yield processed media files, and then the report
+                # Deal with edge case where no report is found
+                media_buffer = []
+                for div in elements:
+                    if image(div):
+                        img = Image(div=div)
+                        media_buffer.append(img)
+                    elif report(div):
+                        _report = Report(div=div)
+                        # Apply date to all elements in buffer
+                        date_text = _report.date_text
+                        for img in media_buffer:
+                            img.date = int(date_text)
+                        # For each image/video, pop from buffer and yield
+                        while len(media_buffer) > 0:
+                            yield media_buffer.pop()
+                        # Once images are processed, yield report div
+                        yield _report
+                # Handle edge case where there are media files but no report
+                while len(media_buffer) > 0:
+                    yield media_buffer.pop()
+
+                # Goto next child, if possible
+                self.next_child()
+
+
 
     def save_report(self, report):
         '''Save a report given the appropriate div.
         '''
 
         # Make file name
-        child_text = self.get_child()
+        child_text = self.get_child_name().lower()
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
         date_text = report.date_text
@@ -327,10 +370,11 @@ class Client:
         key = img.key
         year_text = self.__current_year__.text
         month_text = self.month_lookup[self.__current_month__.text]
-        child_text = self.get_child()
+        child_text = self.get_child_name().lower()
+        default_download_dir = self.config_requests_info()['default_download_dir']
 
         # Make the local filename.
-        filename_parts = ['download', child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
+        filename_parts = [default_download_dir, child_text, year_text, month_text, 'tadpoles-{}-{}-{}-{}-{}.{}']
 
         filename_jpg = abspath(join(*filename_parts).format(child_text, year_text, month_text, date_text, _id, 'jpg'))
         # we might even get a png file even though the mime type is jpeg.
@@ -360,7 +404,9 @@ class Client:
         self.sleep(1, 3)
 
         # Download it with requests.
-        while True:
+        max_retries = int(self.config_requests_info()['max_retries'])
+        retries = 0
+        while retries < max_retries:
             resp = requests.get(url, cookies=self.req_cookies, stream=True)
             if resp.status_code == 200:
                 file = None
@@ -391,27 +437,27 @@ class Client:
                         file.close()
                 break
             else:
-                msg = 'Error downloading %r. Retrying.'
+                msg = 'Error downloading %r. Retrying. Response:'+str(resp)
+                retries += 1
                 self.logger.warning(msg, url)
                 self.sleep(1, 5)
 
     def download_images(self):
         '''Login to tadpoles.com and download all user's images.
         '''
+
         self.navigate_url(self.ROOT_URL)
-
-        try:
-            self.load_cookies()
-        except (OSError, IOError, FileNotFoundError):
-            self.logger.info("Creating new cookies")
-            self.do_login()
-            self.dump_cookies()
-        else:
-            self.add_cookies_to_browser()
-            self.navigate_url(self.HOME_URL)
-
-        # Get the cookies ready for requests lib.
+        self.do_login()
+        self.dump_cookies()
+        self.add_cookies_to_browser()
         self.requestify_cookies()
+
+        # Get application parameters
+        self.app_params = self.browser.execute_script("return tadpoles.appParams")
+        self.logger.info("Loaded Tadpoles parameters")
+
+        # start off with child 0 (if more than one exists)
+        self.current_child_ind = 0
 
         for response in self.iter_urls():
             try:
@@ -424,6 +470,35 @@ class Client:
             except (KeyboardInterrupt):
                 self.logger.info("Download interrupted by user")
 
+# create a config file if one does not already exist/needs to be reset
+def create_config_file(file_name):
+    cfg = ConfigParser()
+    cfg['AUTHENTICATION'] = {}
+    cfg['AUTHENTICATION']['username'] = ''
+    cfg['AUTHENTICATION']['password'] = ''
+    cfg['DOWNLOADS'] = {}
+    cfg['DOWNLOADS']['max_retries'] = '5'
+    cfg['DOWNLOADS']['default_download_dir'] = 'download'
+    with open(file_name, 'w') as cfg_file:
+        cfg.write(cfg_file)
+    print("New configuration file generated!\n")
+    print("Please edit 'settings.ini' and input your authentication information before continuing to use this script.\n")
+
+# open an already existing config file (assumes correct items)
+def read_config_file(file_name):
+    cfg = ConfigParser()
+    cfg.read(file_name)
+    return cfg
+
 if __name__ == "__main__":
-    with Client() as client:
+    settings = 'settings.ini'
+    config = None
+    if isfile(settings):
+        config = read_config_file(settings)
+    else:
+        create_config_file(settings)
+        input("Press any key to exit.")
+        exit()
+
+    with Client(config) as client:
         client.download_images()
