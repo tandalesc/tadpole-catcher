@@ -200,7 +200,7 @@ class Client:
             self.current_child_ind=0
 
     def do_login(self):
-        """Perform login to tadpole (using google)"""
+        """Perform login to tadpole (without Google SSO)"""
         self.logger.info("Navigating to login page.")
         self.browser.find_element_by_id("login-button").click()
         self.browser.find_element_by_class_name("tp-block-half").click()
@@ -208,9 +208,9 @@ class Client:
 
         # Get email, password, and submit elements
         form = self.browser.find_element_by_class_name("form-horizontal")
-        email_form =  form.find_element_by_xpath('//input[@type="text"]')
-        pwd_form = form.find_element_by_xpath('//input[@type="password"]')
-        submit = form.find_element_by_xpath('//button[@type="submit"]')
+        email_form = self.find_by_xpath('//input[@type="text"]', 'Email field', form)
+        pwd_form = self.find_by_xpath('//input[@type="password"]', 'Password field', form)
+        submit = self.find_by_xpath('//button[@type="submit"]', 'Submit button', form)
 
         # Fill out info and submit
         email = self.config_login_info()['username']
@@ -240,19 +240,12 @@ class Client:
             # Go home if not there already.
             if self.browser.current_url != self.HOME_URL:
                 self.navigate_url(self.HOME_URL)
-            try:
-                # Find the next month and year elements.
-                month = self.browser.find_element_by_xpath(month_xpath)
-                year = self.browser.find_element_by_xpath(year_xpath)
-            except NoSuchElementException:
-                # We reached the end of months on the profile page.
-                self.logger.info("No months left to scrape. Stopping.")
-                sys.exit(0)
-
+            # Find the next month and year elements.
+            month = self.find_by_xpath(month_xpath, "any more months")
+            year = self.find_by_xpath(year_xpath, "any more years")
             self.__current_month__ = month
             self.__current_year__ = year
             yield month
-
             month_index += 1
 
     def iter_urls(self):
@@ -262,7 +255,7 @@ class Client:
             # Click the "All" button, so reports are included in our iterator
             self.sleep(1, 3) # Ensure page is loaded
             self.logger.info("Clicking 'All' button to load reports")
-            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[3]/div[2]/div[1]/div[2]/ul/li[1]')
+            all_btn = self.find_by_xpath('//*[@id="app"]/div[3]/div[2]/div[1]/div[2]/ul/li[1]', "'All' button on the Timeline")
             all_btn.click()
 
         # For each month on the dashboard...
@@ -278,7 +271,8 @@ class Client:
                 if(self.get_num_children() > 1):
                     self.logger.info("Clicking on %s's page", self.get_child_name())
                     #0 ->2nd li, 1->3rd li, etc.
-                    current_child = self.browser.find_element_by_xpath('//*[@id="app"]/div[2]/div[3]/ul/li['+str(self.current_child_ind+2)+']/li/div')
+                    cur_child_xpath = '//*[@id="app"]/div[2]/div[3]/ul/li[%s]/li/div' % str(self.current_child_ind+2)
+                    current_child = self.find_by_xpath(cur_child_xpath, "link to %s's page" % self.get_child_name())
                     # click events are only activated on mouseover
                     chain = ActionChains(self.browser).move_to_element_with_offset(current_child, 5, 5).click()
                     chain.perform()
@@ -348,9 +342,10 @@ class Client:
         body = self.browser.find_element_by_class_name('modal-overflow-wrapper')
         text = body.get_attribute('innerHTML')
         # Close pop-up
-        x = self.browser.find_element_by_xpath('//*[@id="dr-modal-printable"]/div[1]/i')
+        x = self.find_by_xpath('//*[@id="dr-modal-printable"]/div[1]/i', 'Close Popup Button')
         x.click()
-        self.sleep(1, 2) # Wait to load
+        # Wait to load
+        self.sleep(1, 2)
 
         with open(filename_report, 'w', encoding='UTF-8') as report_file:
             self.logger.info("Saving: %s", filename_report)
@@ -469,6 +464,19 @@ class Client:
                 self.logger.exception("Error while saving resource")
             except (KeyboardInterrupt):
                 self.logger.info("Download interrupted by user")
+
+    def find_by_xpath(self, selector, name='element', form=None):
+        '''Find element by xpath, but catch NoSuchElementException to log which XPath is faulty
+        '''
+        if form==None:
+            form = self.browser
+        try:
+            el = form.find_element_by_xpath(selector)
+        except NoSuchElementException:
+            self.logger.info("Could not find %s using XPath %s. Stopping.", name, selector)
+            sys.exit(0)
+        return el
+
 
 # create a config file if one does not already exist/needs to be reset
 def create_config_file(file_name):
