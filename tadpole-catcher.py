@@ -231,7 +231,7 @@ class Client:
         '''Yields pairs of xpaths for each year/month tile on the
         right hand side of the user's home page.
         '''
-        month_xpath_tmpl = '//*[@id="app"]/div[4]/div[1]/ul/li[%d]/div/div/div/div/span[%d]'
+        month_xpath_tmpl = '//*[@id="app"]/div[3]/div[1]/ul/li[%d]/div/div/div/div/span[%d]'
         month_index = 1
         while True:
             month_xpath = month_xpath_tmpl % (month_index, 1)
@@ -262,7 +262,7 @@ class Client:
             # Click the "All" button, so reports are included in our iterator
             self.sleep(1, 3) # Ensure page is loaded
             self.logger.info("Clicking 'All' button to load reports")
-            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[4]/div[2]/div[1]/div[2]/ul/li[1]/a')
+            all_btn = self.browser.find_element_by_xpath('//*[@id="app"]/div[3]/div[2]/div[1]/div[2]/ul/li[1]')
             all_btn.click()
 
         # For each month on the dashboard...
@@ -278,7 +278,7 @@ class Client:
                 if(self.get_num_children() > 1):
                     self.logger.info("Clicking on %s's page", self.get_child_name())
                     #0 ->2nd li, 1->3rd li, etc.
-                    current_child = self.browser.find_element_by_xpath('//*[@id="app"]/div[3]/div[3]/ul/li['+str(self.current_child_ind+2)+']/li/div')
+                    current_child = self.browser.find_element_by_xpath('//*[@id="app"]/div[2]/div[3]/ul/li['+str(self.current_child_ind+2)+']/li/div')
                     # click events are only activated on mouseover
                     chain = ActionChains(self.browser).move_to_element_with_offset(current_child, 5, 5).click()
                     chain.perform()

@@ -82,3 +82,6 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 conf.json
+
+settings.ini
+cookies.pkl
