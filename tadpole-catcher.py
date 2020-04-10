@@ -180,14 +180,22 @@ class Client:
         self.browser.switch_to.window(other_window)
 
     def get_current_child(self):
-        return self.app_params['children'][self.current_child_ind]
+        return self.get_children_params()[self.current_child_ind]
 
     def get_child_name(self):
         display_name = self.get_current_child()['display_name']
         return display_name.split(' ')[0]
 
     def get_num_children(self):
-        return len(self.app_params['children'])
+        return len(self.get_children_params())
+
+    def get_children_params(self):
+        #tadpoles does not provide the children attribute if there is only one child
+        if 'children' in self.app_params:
+            return self.app_params['children']
+        else:
+            #if there is only one child, provide default parameters
+            return [{'display_name': 'child'}]
 
     def has_next_child(self):
         return self.current_child_ind+1 < self.get_num_children()
